@@ -82,7 +82,7 @@ def QR_Based_TEBD_Sim(Initial_MPS, Hamiltonian, Number_Of_Fock_States, Simulatio
         magnetization[it] = np.real(psi.expectation_value(Pauli_Z_Operator))
 
     return times, occupation, magnetization
-def Plot_Boson_Ocupation_And_Spin_Magnetisaion(times, occupation, magnetization):
+def Plot_Boson_Ocupation_And_Spin_Magnetisaion(times, occupation, magnetization, Name):
     fig, axs = plt.subplots(2, 1, figsize=(10, 7)) # axs[0] = boson occupation, axs[1] = spin magnetisation
     for i, n in enumerate(occupation.T): # .T gives one row per site
         axs[0].plot(times, n, label=f"Mode {i}")
@@ -90,6 +90,7 @@ def Plot_Boson_Ocupation_And_Spin_Magnetisaion(times, occupation, magnetization)
         axs[1].plot(times, sz, label=f"Spin {i}")
     axs[0].set_ylabel(r"$\langle n \rangle$")
     axs[1].set_ylabel(r"$\langle Z \rangle$")
+    axs[0].set_title(Name)
     for ax in axs: # Shared formatting for both panels
         ax.set_xlabel("Time")
         ax.legend()
@@ -98,23 +99,24 @@ def Plot_Boson_Ocupation_And_Spin_Magnetisaion(times, occupation, magnetization)
 
 
 Initial_State = [0, 0, 0, 0, 0]
-Number_Of_Fock_States = 4
+Number_Of_Fock_States = 5
 Displacement_Coefficent = 1
 Spin_Interaction_Coefficent = 0.1
 Spin_Boson_Interaction_Coefficent = Displacement_Coefficent * (Number_Of_Fock_States -0.5)**0.5
 
 Simulation_Time = 100
 Timestep = 0.1
-Steps_Per_Sample = 1
+Steps_Per_Sample = 5
 Max_Bond_Dimension = 32
 cbe_expand = 0.1
 Tebd_Order = 2
 
 Initial_State, Number_Of_Fock_States, Spin_Interaction_Coefficent, Spin_Boson_Interaction_Coefficent, Simulation_Time, Timestep, Steps_Per_Sample, Max_Bond_Dimension, cbe_expand, Tebd_Order = Command_Line_Parameters(Initial_State, Number_Of_Fock_States, Displacement_Coefficent, Spin_Interaction_Coefficent, Simulation_Time, Timestep, Steps_Per_Sample, Max_Bond_Dimension, cbe_expand, Tebd_Order)
+Name = f'QRTEBD_S{"".join(map(str, Initial_State))}_N{Number_Of_Fock_States}_J{Spin_Interaction_Coefficent}_T{Simulation_Time}_Bond{Max_Bond_Dimension}_Step{Timestep}_cbe{cbe_expand}'
 
 Initial_MPS = Initial_State_To_MPS(Initial_State, Number_Of_Fock_States)
 Hamiltonian = QR_Based_TEBD_Hamiltonian(Initial_State, Number_Of_Fock_States, Displacement_Coefficent, Spin_Interaction_Coefficent, Spin_Boson_Interaction_Coefficent)
 times, occupation, magnetization = QR_Based_TEBD_Sim(Initial_MPS, Hamiltonian, Number_Of_Fock_States, Simulation_Time, Timestep, Steps_Per_Sample, Max_Bond_Dimension, cbe_expand, Tebd_Order)
-np.savez(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Output', f'QRTEBD_S{"".join(map(str, Initial_State))}_N{Number_Of_Fock_States}_J{Spin_Interaction_Coefficent}_T{Simulation_Time}_Bond{Max_Bond_Dimension}_Step{Timestep}_cbe{cbe_expand}.npz'), times=times, occupation=occupation, magnetization=magnetization) # Next to this script, not the working directory
-fig = Plot_Boson_Ocupation_And_Spin_Magnetisaion(times, occupation, magnetization)
+np.savez(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Output', f'{Name}.npz'), times=times, occupation=occupation, magnetization=magnetization) # Next to this script, not the working directory
+fig = Plot_Boson_Ocupation_And_Spin_Magnetisaion(times, occupation, magnetization, Name)
 plt.show()
