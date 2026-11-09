@@ -18,6 +18,10 @@ def Boson_Clock(Number_Of_Fock_States, Displacement_Coefficent, Time_List):
     return P_top, exp_n
 def Initial_State_To_Operator(Initial_State):
     return tensor([basis(2, i) for i in Initial_State])
+def GHZ_State_To_Operator(Number_Of_Spins):
+    All_Up = tensor([basis(2, 0) for _ in range(Number_Of_Spins)])
+    All_Down = tensor([basis(2, 1) for _ in range(Number_Of_Spins)])
+    return (All_Up + All_Down) / np.sqrt(2)
 def Hamiltonian(Initial_State, Spin_Interaction_Coefficent, Spin_Boson_Interaction_Coefficent, P_top, Time_List):
     sx_list, sy_list, sz_list = [], [], []
     for i in range(len(Initial_State)):
@@ -40,7 +44,7 @@ def Qutip_Sim(H, Initial_State_Operator, Time_List, sz_list):
 def Plot_Comparison(Time_List, exp_n, exp_sz, Full_Data, Name):
     fig, axs = plt.subplots(4, 1, figsize=(10, 9), sharex=True)
     axs[0].plot(Time_List, exp_n)
-    axs[0].set_ylabel(r"$P_{N-1}(t)$")
+    axs[0].set_ylabel(r"$\langle n \rangle(t)$ Isolated Boson")
     axs[0].set_title(Name)
     for i, sz in enumerate(exp_sz):
         axs[1].plot(Time_List, sz, label=f"Spin {i}")
@@ -65,19 +69,26 @@ def Plot_Comparison(Time_List, exp_n, exp_sz, Full_Data, Name):
     return fig
 
 
-Initial_State = [0, 0, 0, 0, 0]
+Initial_State = [0, 0, 1, 0, 0]
+Number_Of_Spins = 5
 Number_Of_Fock_States = 8
 Displacement_Coefficent = 1
-Spin_Interaction_Coefficent = 0.1
+Spin_Interaction_Coefficent = 0.01
 Spin_Boson_Interaction_Coefficent = (np.pi/4) * Displacement_Coefficent * (Number_Of_Fock_States - 0.5)**0.5
-Simulation_Time = 200
+Simulation_Time = 500
 Time_List = np.linspace(0, Simulation_Time, int(20 * Simulation_Time) + 1)
+
+Max_Bond_Dimension = 64
+cbe_expand = 0.1
+Timestep = 0.1
 
 P_top, exp_n = Boson_Clock(Number_Of_Fock_States, Displacement_Coefficent, Time_List)
 H, sz_list = Hamiltonian(Initial_State, Spin_Interaction_Coefficent, Spin_Boson_Interaction_Coefficent, P_top, Time_List)
-exp_sz = Qutip_Sim(H, Initial_State_To_Operator(Initial_State), Time_List, sz_list)
+Initial_State_Vector = Initial_State_To_Operator(Initial_State)
+# Initial_State_Vector = GHZ_State_To_Operator(Number_Of_Spins)
+exp_sz = Qutip_Sim(H, Initial_State_Vector, Time_List, sz_list)
 
-Full_Name = f'QRTEBD_S{"".join(map(str, Initial_State))}_N{Number_Of_Fock_States}_J{Spin_Interaction_Coefficent}_T{Simulation_Time}_Bond32_Step0.1_cbe0.1'
+Full_Name = f'QRTEBD_S{"".join(map(str, Initial_State))}_N{Number_Of_Fock_States}_J{Spin_Interaction_Coefficent}_T{Simulation_Time}_Bond{Max_Bond_Dimension}_Step{Timestep}_cbe{cbe_expand}'
 Full_Path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Output', f'{Full_Name}.npz')
 Full_Data = np.load(Full_Path) if os.path.exists(Full_Path) else None
 fig = Plot_Comparison(Time_List, exp_n, exp_sz, Full_Data, f'Classical clock vs {Full_Name}')

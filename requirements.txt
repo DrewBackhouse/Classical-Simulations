@@ -1,0 +1,5 @@
+# Installed into TeNPyvenv by setup_venv.sh on CREATE (system /usr/bin/python3, 3.12). Same versions as the local ClassicalSims venv
+numpy==2.5.4
+scipy==1.18.1
+physics-tenpy==1.1.1
+matplotlib==3.11.2

@@ -1,8 +1,10 @@
-# ssh k2148668@hpc.create.kcl.ac.uk
-# rsync -av --exclude '__pycache__' --exclude '.DS_Store' --exclude 'Output' --exclude 'TeNPyvenv' --exclude 'logs' Tensor_Networks_TeNPy_CREATE/ k2148668@hpc.create.kcl.ac.uk:~/Tensor_Networks_TeNPy_CREATE/
-# ./submit.sh --ls "4" --bonds "32 64" --steps "0.1 0.05" --mem 1G --time 6:00:00   (see submit.sh, the first run also builds TeNPyvenv with setup_venv.sh)
+# scp Neuron_Tenpy_QRTEBD.py k2148668@hpc.create.kcl.ac.uk:~/ClassicalSims
+# ssh k2148668@hpc.create.kcl.ac.uk, then cd ~/ClassicalSims
+# First time only: ./setup_venv.sh (builds TeNPyvenv on the cluster from requirements.txt)
+# sbatch --mem 2G --time 2:00:00 --cpus-per-task 1 --job-name cbe_QRTEBD Bash_Script.sh --init 01010 --L 5 --N 8 --J 0.1 --T 300 --timestep 0.1 --steps_per_sample 1 --max_bond 64 --cbe_expand 0.2 --tebd_order 2
+# squeue -u k2148668 (shows current Jobs)
 # Check all output logs with: grep -h "done in" logs/*.out
-# rsync -av k2148668@hpc.create.kcl.ac.uk:~/Tensor_Networks_TeNPy_CREATE/Output/ Tensor_Networks_TeNPy_CREATE/Output/
+# rsync -av k2148668@hpc.create.kcl.ac.uk:~/ClassicalSims/Output/ Output/
 
 import os
 import argparse
@@ -15,9 +17,10 @@ from tenpy.networks.mps import MPS
 from tenpy.models.lattice import Chain
 from tenpy.models.model import NearestNeighborModel
 
-def Command_Line_Parameters(Initial_State, Number_Of_Fock_States, Displacement_Coefficent, Spin_Interaction_Coefficent, Simulation_Time, Timestep, Steps_Per_Sample, Max_Bond_Dimension, cbe_expand, Tebd_Order):
+def Command_Line_Parameters(Initial_State, Number_Of_Bosonic_Modes, Number_Of_Fock_States, Displacement_Coefficent, Spin_Interaction_Coefficent, Simulation_Time, Timestep, Steps_Per_Sample, Max_Bond_Dimension, cbe_expand, Tebd_Order):
     parser = argparse.ArgumentParser() # Change default values from the command line
     parser.add_argument('--init', type=str, default=''.join(map(str, Initial_State)), help='Initial qubits, 0 = up, 1 = down, one per site (e.g. 010), its length sets L')
+    parser.add_argument('--L', type=int, default=Number_Of_Bosonic_Modes, help='Number of sites (spin + bosonic mode) for the GHZ state')
     parser.add_argument('--N', type=int, default=Number_Of_Fock_States, help='Number of Fock states per bosonic mode')
     parser.add_argument('--J', type=float, default=Spin_Interaction_Coefficent, help='Spin-spin interaction coefficient')
     parser.add_argument('--T', type=float, default=Simulation_Time, help='Total evolution time')
@@ -29,15 +32,33 @@ def Command_Line_Parameters(Initial_State, Number_Of_Fock_States, Displacement_C
     args = parser.parse_args()
     if set(args.init) - {'0', '1'} or len(args.init) < 2:
         parser.error(f"--init must be a string of at least two 0s and 1s (TEBD needs a bond), got '{args.init}'")
+    if args.L < 2:
+        parser.error(f"--L must be at least 2 (TEBD needs a bond), got {args.L}")
 
     Initial_State = [int(s) for s in args.init]
     Spin_Boson_Interaction_Coefficent = Displacement_Coefficent * (args.N - 0.5)**0.5 # Recomputed as it depends on N
-    return Initial_State, args.N, args.J, Spin_Boson_Interaction_Coefficent, args.T, args.timestep, args.steps_per_sample, args.max_bond, args.cbe_expand, args.tebd_order
+    return Initial_State, args.L, args.N, args.J, Spin_Boson_Interaction_Coefficent, args.T, args.timestep, args.steps_per_sample, args.max_bond, args.cbe_expand, args.tebd_order
 def Initial_State_To_MPS(Initial_State, Number_Of_Fock_States):
     site = Site(npc.LegCharge.from_trivial(2 * Number_Of_Fock_States))
     states = [np.kron(np.eye(2)[s], np.eye(Number_Of_Fock_States)[0]) for s in Initial_State]
     Initial_MPS = MPS.from_product_state([site] * len(Initial_State), states, bc="finite")
     return Initial_MPS
+def GHZ_State_To_MPS(Number_Of_Bosonic_Modes, Number_Of_Fock_States):
+    d = 2 * Number_Of_Fock_States
+    up, down = 0, Number_Of_Fock_States  # local index s*N + n with n = 0
+    site = Site(npc.LegCharge.from_trivial(d))
+    Bflat = []
+    for i in range(Number_Of_Bosonic_Modes):
+        chiL = 1 if i == 0 else 2
+        chiR = 1 if i == Number_Of_Bosonic_Modes - 1 else 2
+        B = np.zeros((d, chiL, chiR))
+        B[up, 0, 0] = 1                                   # branch |00...0>
+        B[down, min(i, 1), min(Number_Of_Bosonic_Modes - 1 - i, 1)] = 1         # branch |11...1>
+        if i == 0:
+            B /= np.sqrt(2)  # sum_s B B^dag = 1 on the first site
+        Bflat.append(B)
+    SVs = [np.ones(1)] + [np.ones(2) / np.sqrt(2)] * (Number_Of_Bosonic_Modes - 1) + [np.ones(1)]
+    return MPS.from_Bflat([site] * Number_Of_Bosonic_Modes, Bflat, SVs, bc="finite", form="B")
 def QR_Based_TEBD_Hamiltonian(Initial_State, Number_Of_Fock_States, Displacement_Coefficent, Spin_Interaction_Coefficent, Spin_Boson_Interaction_Coefficent):
 
     a = np.diag(np.sqrt(np.arange(1, Number_Of_Fock_States)), 1)
@@ -98,23 +119,25 @@ def Plot_Boson_Ocupation_And_Spin_Magnetisaion(times, occupation, magnetization,
     return fig
 
 
-Initial_State = [0, 0, 0, 0, 0]
-Number_Of_Fock_States = 5
+Initial_State = [1,0,1,0,1]
+Number_Of_Bosonic_Modes = 5
+Number_Of_Fock_States = 8
 Displacement_Coefficent = 1
 Spin_Interaction_Coefficent = 0.1
 Spin_Boson_Interaction_Coefficent = Displacement_Coefficent * (Number_Of_Fock_States -0.5)**0.5
 
-Simulation_Time = 100
+Simulation_Time = 300
 Timestep = 0.1
-Steps_Per_Sample = 5
-Max_Bond_Dimension = 32
+Steps_Per_Sample = 1
+Max_Bond_Dimension = 128
 cbe_expand = 0.1
 Tebd_Order = 2
 
-Initial_State, Number_Of_Fock_States, Spin_Interaction_Coefficent, Spin_Boson_Interaction_Coefficent, Simulation_Time, Timestep, Steps_Per_Sample, Max_Bond_Dimension, cbe_expand, Tebd_Order = Command_Line_Parameters(Initial_State, Number_Of_Fock_States, Displacement_Coefficent, Spin_Interaction_Coefficent, Simulation_Time, Timestep, Steps_Per_Sample, Max_Bond_Dimension, cbe_expand, Tebd_Order)
-Name = f'QRTEBD_S{"".join(map(str, Initial_State))}_N{Number_Of_Fock_States}_J{Spin_Interaction_Coefficent}_T{Simulation_Time}_Bond{Max_Bond_Dimension}_Step{Timestep}_cbe{cbe_expand}'
+Initial_State, Number_Of_Bosonic_Modes, Number_Of_Fock_States, Spin_Interaction_Coefficent, Spin_Boson_Interaction_Coefficent, Simulation_Time, Timestep, Steps_Per_Sample, Max_Bond_Dimension, cbe_expand, Tebd_Order = Command_Line_Parameters(Initial_State, Number_Of_Bosonic_Modes, Number_Of_Fock_States, Displacement_Coefficent, Spin_Interaction_Coefficent, Simulation_Time, Timestep, Steps_Per_Sample, Max_Bond_Dimension, cbe_expand, Tebd_Order)
+Name = f'QRTEBD_S{"".join(map(str, Initial_State))}_N{Number_Of_Fock_States}_L{Number_Of_Bosonic_Modes}_J{Spin_Interaction_Coefficent}_T{Simulation_Time}_Bond{Max_Bond_Dimension}_Step{Timestep}_cbe{cbe_expand}'
 
-Initial_MPS = Initial_State_To_MPS(Initial_State, Number_Of_Fock_States)
+# Initial_MPS = Initial_State_To_MPS(Initial_State, Number_Of_Fock_States)
+Initial_MPS = GHZ_State_To_MPS(Number_Of_Bosonic_Modes, Number_Of_Fock_States)
 Hamiltonian = QR_Based_TEBD_Hamiltonian(Initial_State, Number_Of_Fock_States, Displacement_Coefficent, Spin_Interaction_Coefficent, Spin_Boson_Interaction_Coefficent)
 times, occupation, magnetization = QR_Based_TEBD_Sim(Initial_MPS, Hamiltonian, Number_Of_Fock_States, Simulation_Time, Timestep, Steps_Per_Sample, Max_Bond_Dimension, cbe_expand, Tebd_Order)
 np.savez(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Output', f'{Name}.npz'), times=times, occupation=occupation, magnetization=magnetization) # Next to this script, not the working directory
