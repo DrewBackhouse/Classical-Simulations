@@ -1,0 +1,110 @@
+from qutip import sesolve, tensor, basis, qeye, sigmax, sigmay, sigmaz, coherent, partial_transpose, destroy
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+def Bosonic_Log_Negativity(State, i, j, Number_Of_Bosonic_Modes):
+    # Bosons sit after the spins in the tensor ordering, so boson i is subsystem L + i
+    rho = State.ptrace([Number_Of_Bosonic_Modes + i, Number_Of_Bosonic_Modes + j])
+    rho_pt = partial_transpose(rho, [0, 1])
+    return np.log2(rho_pt.norm('tr'))
+def States_And_Operators(Initial_Spin_State, Initial_Bosonic_State, Number_Of_Bosonic_Modes, Number_Of_Fock_States, Displacement_Coeficent, Spin_Interaction_Coefficient, Spin_Boson_Interaction_Coefficent, Delay_Times):
+    Initial_State = tensor(Initial_Spin_State, Initial_Bosonic_State)
+    Delay_Times = np.array(Delay_Times) * 2 * Number_Of_Fock_States**0.5/Displacement_Coeficent
+
+    Bosonic_Identity_List = [qeye(Number_Of_Fock_States) for _ in range(Number_Of_Bosonic_Modes)]
+    Spin_Identity_List = [qeye(2) for _ in range(Number_Of_Bosonic_Modes)]
+    
+    Bosonic_Hop = sum(np.sqrt((n+1) * (2 * Number_Of_Fock_States - n - 1)) * basis(Number_Of_Fock_States, n+1) * basis(Number_Of_Fock_States, n).dag() for n in range(Number_Of_Fock_States-1))
+    Bosonic_Displacement_Operator = Bosonic_Hop + Bosonic_Hop.dag()
+    Bosonic_Displacement_Operator_List = [] 
+    for i in range(Number_Of_Bosonic_Modes):
+        Operator_List = Bosonic_Identity_List.copy()
+        Operator_List[i] = Bosonic_Displacement_Operator
+        Bosonic_Displacement_Operator_List.append(tensor(Spin_Identity_List + Operator_List))
+    Bosonic_Displacement_Hamiltonian = Displacement_Coeficent * sum(Bosonic_Displacement_Operator_List[i] for i in range(Number_Of_Bosonic_Modes) if Delay_Times[i] <= 0)
+
+    sx_list, sy_list, sz_list = [], [], []
+    for i in range(Number_Of_Bosonic_Modes):
+        op_list = Spin_Identity_List.copy()
+        op_list[i] = sigmax()
+        sx_list.append(tensor(op_list + Bosonic_Identity_List))
+        op_list[i] = sigmay()
+        sy_list.append(tensor(op_list + Bosonic_Identity_List))
+        op_list[i] = sigmaz()
+        sz_list.append(tensor(op_list + Bosonic_Identity_List))
+    Spin_Interaction_Hamiltonian = Spin_Interaction_Coefficient * sum(sx_list[i] * sx_list[i + 1] + sy_list[i] * sy_list[i + 1] for i in range(Number_Of_Bosonic_Modes - 1))/2
+    
+    Bosonic_Projection_Operator = basis(Number_Of_Fock_States, Number_Of_Fock_States-1) * basis(Number_Of_Fock_States, Number_Of_Fock_States-1).dag()
+    Interaction_Operator_List = []
+    for i in range(Number_Of_Bosonic_Modes):
+        Spin_Operator_List = Spin_Identity_List.copy()
+        Bosonic_Operator_List = Bosonic_Identity_List.copy()
+        Spin_Operator_List[i] = sigmax()
+        Bosonic_Operator_List[i] = Bosonic_Projection_Operator
+        Interaction_Operator_List.append(tensor(Spin_Operator_List + Bosonic_Operator_List))
+    Interaction_Hamiltonian = Spin_Boson_Interaction_Coefficent * sum(Interaction_Operator_List)
+
+    Hamiltonian = [Bosonic_Displacement_Hamiltonian + Spin_Interaction_Hamiltonian + Interaction_Hamiltonian]
+    for i, Delay in enumerate(Delay_Times):
+        if Delay > 0:
+            Hamiltonian.append([Displacement_Coeficent * Bosonic_Displacement_Operator_List[i], lambda t, Delay=Delay: float(t >= Delay)]) # H = [H, H(t)]
+
+    Bosonic_Number_Operator = destroy(Number_Of_Fock_States).dag() * destroy(Number_Of_Fock_States)
+    n_list = []
+    for i in range(Number_Of_Bosonic_Modes):
+        Operator_List = Bosonic_Identity_List.copy()
+        Operator_List[i] = Bosonic_Number_Operator
+        n_list.append(tensor(Spin_Identity_List + Operator_List))
+
+    return Initial_State, Hamiltonian, sz_list, n_list
+def Qutip_Sim(Hamiltonian, Initial_State, n_list, sz_list, Time):
+    Time_List = np.linspace(0, Time, int(20*Time)+1)
+    N = len(sz_list)
+    Pairs = [(i, j) for i in range(N) for j in range(i + 1, N)]
+    LN_ops = [lambda t, psi, i=i, j=j: Bosonic_Log_Negativity(psi, i, j, N) for (i, j) in Pairs]
+    Result = sesolve(Hamiltonian, Initial_State, Time_List, e_ops = sz_list + n_list + LN_ops, options={"max_step": 0.05})
+    exp_sz = np.array(Result.expect[:N])
+    exp_n = np.array(Result.expect[N:2*N])
+    exp_LN = np.real(np.array(Result.expect[2*N:]))
+    return exp_n, exp_sz, exp_LN, Pairs, Time_List
+def Plot_Exp_n_and_sz(exp_n, exp_sz, exp_LN, Pairs, Time_List):
+    nrows = 3 if Pairs else 2
+    fig, axs = plt.subplots(nrows, 1, sharex=True, figsize=(10, 3*nrows), layout="constrained")
+    def Outside_Legend(ax, Number_Of_Lines):
+        ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1), fontsize="small", ncol=2 if Number_Of_Lines > 6 else 1)
+    for i, n in enumerate(exp_n):
+        axs[0].plot(Time_List, n, label=f"Boson {i}")
+    axs[0].set_ylabel(r"$\langle n \rangle$")
+    Outside_Legend(axs[0], len(exp_n))
+    axs[0].set_title(f"L{Number_Of_Bosonic_Modes}_N{Number_Of_Fock_States}_J{Spin_Interaction_Coefficient}_Delay{Delay_Times}")
+    for i, sz in enumerate(exp_sz):
+        axs[1].plot(Time_List, sz, label=f"Spin {i}")
+    axs[1].set_ylabel(r"$\langle Z \rangle$")
+    Outside_Legend(axs[1], len(exp_sz))
+    if Pairs:
+        for (i, j), LN in zip(Pairs, exp_LN):
+            axs[2].plot(Time_List, LN, label=f"Boson {i}-{j}")
+        axs[2].set_ylabel(r"$E_N$")
+        Outside_Legend(axs[2], len(Pairs))
+    axs[-1].set_xlabel("Time")
+    return fig
+
+
+Number_Of_Fock_States = 5
+Number_Of_Bosonic_Modes = 2
+# Initial_Spin_State = tensor([basis(2,0) for _ in range(Number_Of_Bosonic_Modes)])
+Initial_Spin_State = tensor([basis(2,0), basis(2,0)])
+Initial_Bosonic_State = tensor([basis(Number_Of_Fock_States,0) for _ in range(Number_Of_Bosonic_Modes)])
+Delay_Times = [0, 0.05] # In units of periods
+Displacement_Coeficent = 1
+Spin_Interaction_Coefficient = 0.2
+Interaction_Correction = 1
+Spin_Boson_Interaction_Coefficent = Number_Of_Fock_States
+Time = 60
+
+
+Initial_State, Hamiltonian, sz_list, n_list = States_And_Operators(Initial_Spin_State, Initial_Bosonic_State, Number_Of_Bosonic_Modes, Number_Of_Fock_States, Displacement_Coeficent, Spin_Interaction_Coefficient, Spin_Boson_Interaction_Coefficent, Delay_Times)
+exp_n, exp_sz, exp_LN, Pairs, Time_List = Qutip_Sim(Hamiltonian, Initial_State, n_list, sz_list, Time)
+fig = Plot_Exp_n_and_sz(exp_n, exp_sz, exp_LN, Pairs, Time_List)
+plt.show()
